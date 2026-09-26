@@ -78,19 +78,45 @@ def train_and_evaluate_cv(candidates_df: pd.DataFrame,
         vp = c.predict_proba(X_va)[:, 1]
         return f_idx, c, v_idx, vp
 
-    fold_tasks = [(f, tr, va) for f, (tr, va) in enumerate(gkf.split(X, y, groups))]
-    n_workers = min(n_splits, os.cpu_count() or 5)
-    print(f"Training all {n_splits} folds simultaneously across {n_workers} CPU cores...")
+    # Downsample extreme negatives if dataset is huge to fit comfortably in RAM and avoid disk paging
+    pos_mask = (y == 1)
+    neg_mask = (y == 0)
+    n_pos = pos_mask.sum()
+    n_neg = neg_mask.sum()
+    if n_neg > 4 * n_pos and len(candidates_df) > 2_000_000:
+        print(f"Sampling negatives to 4:1 ratio (keeping all {n_pos:,} positives + {int(4 * n_pos):,} negatives) for fast in-memory training...")
+        rng = np.random.default_rng(RANDOM_SEED)
+        neg_indices = np.where(neg_mask)[0]
+        chosen_neg_indices = rng.choice(neg_indices, size=int(4 * n_pos), replace=False)
+        keep_indices = np.sort(np.concatenate([np.where(pos_mask)[0], chosen_neg_indices]))
+        
+        candidates_df = candidates_df.iloc[keep_indices].reset_index(drop=True)
+        X = candidates_df[FEATURE_COLUMNS].astype(np.float32)
+        y = candidates_df["label"].values.astype(np.int32)
+        groups = candidates_df["source1_entity_id"].values
+        oof_preds = np.zeros(len(candidates_df), dtype=np.float32)
 
-    fold_results = Parallel(n_jobs=n_workers)(
-        delayed(_train_single_fold)(task) for task in fold_tasks
-    )
+    fold_tasks = list(gkf.split(X, y, groups))
+    print(f"Training {n_splits} folds in-memory (using multi-threaded CPU trees without disk memmapping)...")
 
-    # Sort results by fold index
-    fold_results.sort(key=lambda x: x[0])
-    for f_idx, clf, v_idx, vp in fold_results:
-        models.append(clf)
-        oof_preds[v_idx] = vp
+    for f_idx, (tr_idx, va_idx) in enumerate(fold_tasks):
+        X_tr, y_tr = X.iloc[tr_idx], y[tr_idx]
+        X_va = X.iloc[va_idx]
+        sw = np.where(y_tr == 1, pos_weight, 1.0)
+        c = HistGradientBoostingClassifier(
+            loss="log_loss",
+            learning_rate=0.06,
+            max_iter=300,
+            max_leaf_nodes=45,
+            early_stopping=True,
+            n_iter_no_change=25,
+            random_state=RANDOM_SEED + f_idx,
+            class_weight="balanced"
+        )
+        c.fit(X_tr, y_tr, sample_weight=sw)
+        vp = c.predict_proba(X_va)[:, 1]
+        models.append(c)
+        oof_preds[va_idx] = vp
         print(f"Fold {f_idx + 1}/{n_splits} complete.")
 
     scored_df = candidates_df.copy()

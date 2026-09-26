@@ -109,8 +109,19 @@ def run_training_pipeline(sample_limit: int = 0):
     s1_dict = {r["entity_id"]: r for r in s1_norm.to_dict("records")}
     other_dict = {r["entity_id"]: r for r in other_norm.to_dict("records")}
 
-    print(f"Extracting features for {len(all_pairs)} pairs using all CPU cores (n_jobs=-1)...")
-    cand_df = extract_features_parallel(all_pairs, s1_dict, other_dict, gt_pair_set=gt_pair_set, n_jobs=-1)
+    features_checkpoint = OUTPUT_DIR / f"features_checkpoint_{sample_limit or 'full'}.parquet"
+    if features_checkpoint.exists():
+        print(f"\n[CACHE HIT] Found saved features checkpoint at {features_checkpoint}!")
+        print("Resuming directly to STEP 5 (Training Classifier & Tuning F0.5 Threshold)...")
+        cand_df = pd.read_parquet(features_checkpoint)
+    else:
+        print(f"Extracting features for {len(all_pairs)} pairs using all CPU cores (n_jobs=-1)...")
+        cand_df = extract_features_parallel(all_pairs, s1_dict, other_dict, gt_pair_set=gt_pair_set, n_jobs=-1)
+        try:
+            cand_df.to_parquet(features_checkpoint, index=False)
+            print(f"Features saved to checkpoint: {features_checkpoint}")
+        except Exception as e:
+            print(f"Note: Could not save features checkpoint: {e}")
 
 
     print("\n" + "=" * 65)
