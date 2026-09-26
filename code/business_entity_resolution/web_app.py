@@ -24,6 +24,19 @@ if str(_PROJECT_DIR) not in sys.path:
 from src.path_utils import get_environment_info, detect_test_dir, detect_output_dir, detect_cache_dir
 from src.progress_state import read_progress_state
 
+
+def get_python_exe() -> str:
+    candidates = [
+        _PROJECT_DIR.parent.parent / ".venv" / "Scripts" / "python.exe",
+        _PROJECT_DIR.parent.parent / "venv" / "Scripts" / "python.exe",
+        _PROJECT_DIR / ".venv" / "Scripts" / "python.exe",
+        Path(sys.executable),
+    ]
+    for c in candidates:
+        if c.exists():
+            return str(c)
+    return sys.executable
+
 PORT = 5000
 RUNNER_PROCESS = None
 RUNNER_LOGS = []
@@ -815,9 +828,10 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             ACTIVE_NUM_SHARDS = num_shards
             RUNNER_LOGS = [f"--- Launching Part {shard_id + 1} of {num_shards} ---"]
 
-            py_exe = sys.executable
+            py_exe = get_python_exe()
             cmd = [
                 py_exe,
+                "-u",
                 str(_PROJECT_DIR / "src" / "shard_infer.py"),
                 "--shard-id", str(shard_id),
                 "--num-shards", str(num_shards)
@@ -832,14 +846,19 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                 cwd=str(_PROJECT_DIR)
             )
 
-            # Background thread to capture stdout line by line
+            # Background thread to capture stdout line by line immediately
             def log_reader(proc):
-                for line in proc.stdout:
-                    clean = line.strip()
-                    if clean:
-                        with RUNNER_LOCK:
-                            RUNNER_LOGS.append(clean)
-                proc.stdout.close()
+                try:
+                    for raw_line in iter(proc.stdout.readline, ''):
+                        clean = raw_line.strip()
+                        if clean:
+                            with RUNNER_LOCK:
+                                RUNNER_LOGS.append(clean)
+                except Exception as e:
+                    with RUNNER_LOCK:
+                        RUNNER_LOGS.append(f"[Log error: {e}]")
+                finally:
+                    proc.stdout.close()
 
             threading.Thread(target=log_reader, args=(RUNNER_PROCESS,), daemon=True).start()
 
@@ -853,8 +872,7 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
 
     def run_merge(self):
         out_d = detect_output_dir()
-        test_d = detect_test_dir()
-        py_exe = sys.executable
+        py_exe = get_python_exe()
         cmd = [
             py_exe,
             str(_PROJECT_DIR / "merge_shards.py"),
