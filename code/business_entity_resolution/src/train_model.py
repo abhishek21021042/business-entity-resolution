@@ -91,7 +91,7 @@ def train_and_evaluate_cv(candidates_df: pd.DataFrame,
         keep_indices = np.sort(np.concatenate([np.where(pos_mask)[0], chosen_neg_indices]))
         
         candidates_df = candidates_df.iloc[keep_indices].reset_index(drop=True)
-        X = candidates_df[FEATURE_COLUMNS].astype(np.float32)
+        X = candidates_df[feature_cols].copy()
         y = candidates_df["label"].values.astype(np.int32)
         groups = candidates_df["source1_entity_id"].values
         oof_preds = np.zeros(len(candidates_df), dtype=np.float32)
