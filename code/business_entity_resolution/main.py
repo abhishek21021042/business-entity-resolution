@@ -17,6 +17,8 @@ from src.blocking import (
     exact_key_blocking,
     phonetic_blocking,
     tfidf_topk_blocking,
+    first_word_blocking,
+    address_key_blocking,
     union_candidates,
     candidate_list_to_dict
 )
@@ -77,10 +79,18 @@ def run_training_pipeline(sample_limit: int = 0):
     print(f"Pass 2 generated: {len(p2)} pairs")
 
     print("Pass 3: Character n-gram TF-IDF top-K...")
-    p3 = tfidf_topk_blocking(s1_norm, other_norm, k=15)
+    p3 = tfidf_topk_blocking(s1_norm, other_norm, k=25)
     print(f"Pass 3 generated: {len(p3)} pairs")
 
-    all_pairs = union_candidates(p1, p2, p3)
+    print("Pass 4: Distinctive first-word core name hashing...")
+    p4 = first_word_blocking(s1_norm, other_norm)
+    print(f"Pass 4 generated: {len(p4)} pairs")
+
+    print("Pass 5: Exact house/flat number + locality hashing...")
+    p5 = address_key_blocking(s1_norm, other_norm)
+    print(f"Pass 5 generated: {len(p5)} pairs")
+
+    all_pairs = union_candidates(p1, p2, p3, p4, p5)
     print(f"Total Union Candidate Pairs: {len(all_pairs)}")
 
     cand_dict = candidate_list_to_dict(all_pairs)

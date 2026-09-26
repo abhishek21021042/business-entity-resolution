@@ -4,6 +4,7 @@ Extracts rich string, phonetic, token, structural, and semantic features
 for pairwise matching between Source-1 and candidate Source-2/3 records.
 """
 
+import re
 from typing import Dict, Any, List, Optional, Tuple, Set
 import numpy as np
 import pandas as pd
@@ -11,6 +12,7 @@ from rapidfuzz import fuzz
 from rapidfuzz.distance import Levenshtein, JaroWinkler
 
 from .phonetic import nysiis
+from .indic import transliterate_indic_to_latin
 
 
 def jaccard_similarity(tokens1: List[str], tokens2: List[str]) -> float:
@@ -108,6 +110,48 @@ def compute_pair_features(s1_row: Dict[str, Any], cand_row: Dict[str, Any],
     combined_2 = f"{n2} {a2}".strip()
     combined_token_set = fuzz.token_set_ratio(combined_1, combined_2) / 100.0 if (combined_1 or combined_2) else 0.0
 
+    # Address number matching
+    def extract_nums(text: str) -> Set[str]:
+        if not text:
+            return set()
+        raw = re.findall(r"\b[a-zA-Z]?[-#]?\d+[/a-zA-Z\-_]*\d*[a-zA-Z]?\b", str(text).lower())
+        res = set()
+        for item in raw:
+            c = item.strip("-# ").replace(" ", "")
+            if len(c) >= 2 and any(ch.isdigit() for ch in c):
+                res.add(c)
+                d = re.sub(r"\D", "", c)
+                if len(d) >= 2:
+                    res.add(d)
+                    res.add(d.lstrip("0"))
+        return res
+
+    nums1 = extract_nums(s1_row.get("raw_addr", a1))
+    nums2 = extract_nums(cand_row.get("raw_addr", a2))
+    common_nums = nums1 & nums2
+    has_common_addr_num = int(bool(common_nums))
+    high_confidence_addr_match = int(has_common_addr_num == 1 and token_sort_addr >= 0.65)
+
+    # Transliterated Indic name matching
+    s1_raw_name = str(s1_row.get("raw_name", n1))
+    cand_raw_name = str(cand_row.get("raw_name", n2))
+    s1_trans = transliterate_indic_to_latin(s1_raw_name)
+    cand_trans = transliterate_indic_to_latin(cand_raw_name)
+    trans_sim = fuzz.token_set_ratio(s1_trans, cand_trans) / 100.0 if (s1_trans or cand_trans) else 0.0
+
+    # Cross-modal max similarity & domain subname match
+    n1_no = re.sub(r"[^\w]", "", n1)
+    n2_no = re.sub(r"[^\w]", "", n2)
+    domain_subname_match = int(bool(len(n1_no) >= 5 and len(n2_no) >= 5 and (n1_no.startswith(n2_no) or n2_no.startswith(n1_no) or n1_no in n2_no or n2_no in n1_no)))
+
+    max_name_sim = max(token_set_name, trans_sim, name_nospace_lev, float(domain_subname_match))
+    joint_confidence = max(max_name_sim, high_confidence_addr_match * 0.95)
+
+    # Acronym match
+    acr1 = "".join(w[0] for w in c1.split() if w)
+    acr2 = "".join(w[0] for w in c2.split() if w)
+    acronym_match = int(bool((len(acr1) >= 2 and acr1 == c2) or (len(acr2) >= 2 and acr2 == c1)))
+
     feats = {
         # Name
         "name_exact": name_exact,
@@ -126,6 +170,11 @@ def compute_pair_features(s1_row: Dict[str, Any], cand_row: Dict[str, Any],
 
         "name_nospace_exact": name_nospace_exact,
         "name_nospace_lev": name_nospace_lev,
+        "name_transliterated_sim": trans_sim,
+        "domain_subname_match": domain_subname_match,
+        "max_name_sim": max_name_sim,
+        "joint_confidence": joint_confidence,
+        "acronym_match": acronym_match,
 
         # Address
         "addr_either_empty": addr_either_empty,
@@ -136,6 +185,9 @@ def compute_pair_features(s1_row: Dict[str, Any], cand_row: Dict[str, Any],
         "addr_postal_missing": postal_either_missing,
         "addr_landmark_match": landmark_match,
         "addr_len_diff": len_diff_addr,
+        "has_common_addr_num": has_common_addr_num,
+        "num_common_addr_nums": len(common_nums),
+        "high_confidence_addr_match": high_confidence_addr_match,
 
         # Combined & Meta
         "combined_token_set": combined_token_set,
@@ -228,5 +280,5 @@ def extract_features_parallel(pairs: List[Tuple[str, str]],
         flat.extend(sublist)
 
     df = pd.DataFrame(flat)
-    return add_rank_and_margin_features(df, score_col="name_token_set_ratio")
+    return add_rank_and_margin_features(df, score_col="joint_confidence")
 

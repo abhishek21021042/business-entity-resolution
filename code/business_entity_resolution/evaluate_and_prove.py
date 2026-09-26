@@ -16,6 +16,8 @@ from src.blocking import (
     exact_key_blocking,
     phonetic_blocking,
     tfidf_topk_blocking,
+    first_word_blocking,
+    address_key_blocking,
     union_candidates,
     candidate_list_to_dict
 )
@@ -108,8 +110,10 @@ def run_proof_evaluation(n_entities: int = 500):
     print("\n[3/5] Running multi-pass candidate blocking...", flush=True)
     p1 = exact_key_blocking(s1_norm, other_norm)
     p2 = phonetic_blocking(s1_norm, other_norm)
-    p3 = tfidf_topk_blocking(s1_norm, other_norm, k=15)
-    all_pairs = union_candidates(p1, p2, p3)
+    p3 = tfidf_topk_blocking(s1_norm, other_norm, k=25)
+    p4 = first_word_blocking(s1_norm, other_norm)
+    p5 = address_key_blocking(s1_norm, other_norm)
+    all_pairs = union_candidates(p1, p2, p3, p4, p5)
     print(f"Generated {len(all_pairs)} candidate pairs.", flush=True)
 
     # [4/5] Features & Scoring with Saved Models
@@ -128,7 +132,7 @@ def run_proof_evaluation(n_entities: int = 500):
             pair_rows.append(feat)
 
     cand_df = pd.DataFrame(pair_rows)
-    cand_df = add_rank_and_margin_features(cand_df, score_col="name_token_set_ratio")
+    cand_df = add_rank_and_margin_features(cand_df, score_col="joint_confidence")
 
     model_file = MODELS_DIR / "ensemble_models.joblib"
     meta_file = MODELS_DIR / "meta.joblib"

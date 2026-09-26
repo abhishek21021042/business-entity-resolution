@@ -18,6 +18,8 @@ from .blocking import (
     exact_key_blocking,
     phonetic_blocking,
     tfidf_topk_blocking,
+    first_word_blocking,
+    address_key_blocking,
     union_candidates,
     candidate_list_to_dict
 )
@@ -55,18 +57,20 @@ def run_test_inference(test_s1_path: Path,
 
     all_s1_ids = [str(x).strip() for x in s1_raw["entity_id"].tolist()]
 
-    s1_norm = pd.DataFrame([normalize_record(row) for _, row in s1_raw.iterrows()])
-    s2_norm = pd.DataFrame([normalize_record(row) for _, row in s2_raw.iterrows()])
-    s3_norm = pd.DataFrame([normalize_record(row) for _, row in s3_raw.iterrows()])
+    s1_norm = pd.DataFrame([normalize_record(row) for row in s1_raw.to_dict("records")])
+    s2_norm = pd.DataFrame([normalize_record(row) for row in s2_raw.to_dict("records")])
+    s3_norm = pd.DataFrame([normalize_record(row) for row in s3_raw.to_dict("records")])
 
     other_norm = pd.concat([s2_norm, s3_norm], ignore_index=True)
 
-    print("--- Executing Multi-Pass Blocking on Test ---")
+    print("--- Executing 5-Pass Blocking on Test ---")
     pass1 = exact_key_blocking(s1_norm, other_norm)
     pass2 = phonetic_blocking(s1_norm, other_norm)
-    pass3 = tfidf_topk_blocking(s1_norm, other_norm, k=15)
+    pass3 = tfidf_topk_blocking(s1_norm, other_norm, k=25)
+    pass4 = first_word_blocking(s1_norm, other_norm)
+    pass5 = address_key_blocking(s1_norm, other_norm)
 
-    all_pairs = union_candidates(pass1, pass2, pass3)
+    all_pairs = union_candidates(pass1, pass2, pass3, pass4, pass5)
     print(f"Total candidate pairs generated: {len(all_pairs)} for {len(all_s1_ids)} S1 entities")
 
     candidate_dict = candidate_list_to_dict(all_pairs)
@@ -77,8 +81,8 @@ def run_test_inference(test_s1_path: Path,
         return candidate_dict, matched_dict, all_s1_ids
 
     print("--- Extracting Features for Candidate Pairs ---")
-    s1_dict = {row["entity_id"]: row for _, row in s1_norm.iterrows()}
-    other_dict = {row["entity_id"]: row for _, row in other_norm.iterrows()}
+    s1_dict = {row["entity_id"]: row for row in s1_norm.to_dict("records")}
+    other_dict = {row["entity_id"]: row for row in other_norm.to_dict("records")}
 
     pair_rows = []
     for sid, cid in tqdm(all_pairs, desc="Pairwise features"):
@@ -91,7 +95,7 @@ def run_test_inference(test_s1_path: Path,
             pair_rows.append(feats)
 
     cand_feat_df = pd.DataFrame(pair_rows)
-    cand_feat_df = add_rank_and_margin_features(cand_feat_df, score_col="name_token_set_ratio")
+    cand_feat_df = add_rank_and_margin_features(cand_feat_df, score_col="joint_confidence")
 
     feature_cols = get_feature_columns(cand_feat_df)
     X_test = cand_feat_df[feature_cols]
