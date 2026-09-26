@@ -7,15 +7,24 @@ verifying exact PRD format compliance.
 import argparse
 from pathlib import Path
 import sys
+from typing import Optional
 import pandas as pd
 
+from src.path_utils import detect_output_dir, detect_test_dir
 from utils.validate_submission import validate_submission
 
 
-def merge_shards(output_dir: Path, num_shards: int = 3, test_dir: Path = Path("D:/test_data")):
+def merge_shards(output_dir: Optional[Path] = None, num_shards: int = 3, test_dir: Optional[Path] = None):
+    if output_dir is None:
+        output_dir = detect_output_dir()
+    if test_dir is None:
+        test_dir = detect_test_dir()
+
     print("=" * 65)
     print(f"MERGING {num_shards} DISTRIBUTED SHARDS INTO FINAL SUBMISSION")
     print("=" * 65)
+    print(f"Output Directory: {output_dir}")
+    print(f"Test Directory:   {test_dir}")
 
     final_cand_path = output_dir / "candidate_pairs.tsv"
     final_match_path = output_dir / "matching_results.tsv"
@@ -80,9 +89,9 @@ def merge_shards(output_dir: Path, num_shards: int = 3, test_dir: Path = Path("D
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Merge Distributed Inference Shards")
-    parser.add_argument("--output-dir", type=Path, default=Path("D:/output"), help="Folder containing shard TSVs")
+    parser.add_argument("--output-dir", type=Path, default=None, help="Folder containing shard TSVs (auto-detected if None)")
     parser.add_argument("--num-shards", type=int, default=3, help="Number of shards to merge (default: 3)")
-    parser.add_argument("--test-dir", type=Path, default=Path("D:/test_data"), help="Test data directory for validation")
+    parser.add_argument("--test-dir", type=Path, default=None, help="Test data directory for validation (auto-detected if None)")
 
     args = parser.parse_args()
     merge_shards(output_dir=args.output_dir, num_shards=args.num_shards, test_dir=args.test_dir)

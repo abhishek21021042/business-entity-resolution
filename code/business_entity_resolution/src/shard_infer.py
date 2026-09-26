@@ -9,6 +9,7 @@ from pathlib import Path
 import sys
 import time
 import os
+from typing import Optional
 
 # Ensure project root is in sys.path
 _CURRENT_DIR = Path(__file__).resolve().parent
@@ -22,6 +23,8 @@ import pandas as pd
 from tqdm import tqdm
 
 from src.config import PROJECT_ROOT, MODELS_DIR, DEFAULT_THRESHOLD
+from src.path_utils import detect_test_dir, detect_output_dir, detect_cache_dir
+from src.progress_state import ProgressTracker
 from src.data_loading import load_source_df
 from src.normalization import normalize_record, parallel_normalize_records
 from src.blocking import (
@@ -39,8 +42,8 @@ from src.infer import resolve_global_conflicts, apply_singleton_rule
 
 
 def run_sharded_inference(
-    test_dir: Path,
-    output_dir: Path,
+    test_dir: Optional[Path] = None,
+    output_dir: Optional[Path] = None,
     num_shards: int = 3,
     shard_id: int = 0,
     chunk_size: int = 100_000,
@@ -49,7 +52,13 @@ def run_sharded_inference(
     """
     Runs inference on a specific shard (1/Nth) of Source-1 entities.
     Processes S1 in streaming memory-safe chunks of `chunk_size`.
+    Auto-detects paths if not specified.
     """
+    if test_dir is None:
+        test_dir = detect_test_dir()
+    if output_dir is None:
+        output_dir = detect_output_dir()
+
     output_dir.mkdir(parents=True, exist_ok=True)
     out_cand_file = output_dir / f"shard_{shard_id}_of_{num_shards}_candidate_pairs.tsv"
     out_match_file = output_dir / f"shard_{shard_id}_of_{num_shards}_matching_results.tsv"
@@ -57,8 +66,8 @@ def run_sharded_inference(
     print("=" * 65)
     print(f"DISTRIBUTED INFERENCE: SHARD {shard_id + 1} OF {num_shards}")
     print("=" * 65)
-    print(f"Test Directory:   {test_dir}")
-    print(f"Output Directory: {output_dir}")
+    print(f"Test Directory:   {test_dir}  [AUTO-DETECTED]")
+    print(f"Output Directory: {output_dir}  [AUTO-DETECTED]")
     print(f"Target Shard:     Part {shard_id + 1}/{num_shards}")
     print(f"Candidate Output: {out_cand_file.name}")
     print(f"Matching Output:  {out_match_file.name}")
@@ -89,8 +98,7 @@ def run_sharded_inference(
 
     # ── CACHE: Load from pickle if available (saves ~10 min on repeated runs) ──
     import pickle
-    cache_dir = output_dir / "_cache"
-    cache_dir.mkdir(parents=True, exist_ok=True)
+    cache_dir = detect_cache_dir(output_dir)
     norm_cache  = cache_dir / "other_norm.pkl"
     index_cache = cache_dir / "blocking_index.pkl"
 
@@ -108,7 +116,7 @@ def run_sharded_inference(
         print(f"Normalized S2+S3 in {time.time() - t0:.1f}s — saving cache...")
         with open(norm_cache, "wb") as f:
             pickle.dump(other_norm, f, protocol=5)
-        print(f"Cache saved to {norm_cache}  (copy to other laptops D:\\output\\_cache\\ for instant startup)")
+        print(f"Cache saved to {norm_cache}  (copy to other laptops for instant startup)")
 
     other_dict = {r["entity_id"]: r for r in other_norm.to_dict("records")}
 
@@ -126,6 +134,10 @@ def run_sharded_inference(
 
     print(f"Total S1 entities in dataset: {total_s1:,}")
     print(f"Assigned to this shard: rows {start_idx:,} to {end_idx:,} ({shard_count:,} entities)")
+
+    # Initialize live progress tracker
+    tracker = ProgressTracker(output_dir, shard_id, num_shards, shard_count)
+    tracker.update_stage("Cache Ready", "Loaded models & pre-normalized database")
 
     # Initialize output TSV headers
     with open(out_cand_file, "w", encoding="utf-8") as f:
@@ -314,7 +326,16 @@ def run_sharded_inference(
 
         elapsed = time.time() - c_t0
         print(f"Chunk {chunk_idx + 1} completed in {elapsed:.1f}s | Progress: {c_end:,}/{shard_count:,} S1\n")
+        tracker.update_chunk_progress(
+            chunk_idx=chunk_idx,
+            total_chunks=n_chunks,
+            processed_entities=c_end,
+            new_candidates=len(c_pairs),
+            new_matches=total_matches_found,
+            stage_msg=f"Finished Chunk {chunk_idx + 1}/{n_chunks} ({c_end:,}/{shard_count:,} S1)"
+        )
 
+    tracker.mark_complete(out_cand_file, out_match_file)
     print("=" * 65)
     print(f"SHARD {shard_id + 1} COMPLETED SUCCESSFULLY!")
     print(f"Total S1 entities processed: {shard_count:,}")
@@ -328,8 +349,8 @@ def run_sharded_inference(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Distributed Sharded Inference")
-    parser.add_argument("--test-dir", type=Path, default=Path("D:/test_data"), help="Path to test directory")
-    parser.add_argument("--output-dir", type=Path, default=Path("D:/output"), help="Path to output directory")
+    parser.add_argument("--test-dir", type=Path, default=None, help="Path to test directory (auto-detected if omitted)")
+    parser.add_argument("--output-dir", type=Path, default=None, help="Path to output directory (auto-detected if omitted)")
     parser.add_argument("--num-shards", type=int, default=3, help="Total number of laptops/shards (default: 3)")
     parser.add_argument("--shard-id", type=int, default=0, help="Zero-indexed shard ID (0, 1, or 2)")
     parser.add_argument("--chunk-size", type=int, default=100000, help="Streaming batch size")
