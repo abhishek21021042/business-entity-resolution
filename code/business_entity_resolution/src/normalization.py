@@ -7,6 +7,7 @@ Fully country-agnostic with graceful fallbacks (e.g., France test set).
 import re
 import unicodedata
 from typing import Dict, Any, Optional
+import pandas as pd
 
 # Comprehensive canonical legal entity suffix mapping
 LEGAL_SUFFIXES = {
@@ -163,3 +164,27 @@ def normalize_record(row: Dict[str, Any]) -> Dict[str, Any]:
         "postal_code": addr_norm["postal_code"],
         "landmark": addr_norm["landmark"],
     }
+
+
+def _normalize_batch(batch: list) -> list:
+    return [normalize_record(r) for r in batch]
+
+
+def parallel_normalize_records(records: list, n_jobs: int = 8) -> pd.DataFrame:
+    """Normalizes records in parallel across all CPU cores."""
+    import os
+    import multiprocessing as mp
+    import pandas as pd
+
+    if len(records) < 5000:
+        return pd.DataFrame([normalize_record(r) for r in records])
+
+    n_workers = min(n_jobs, os.cpu_count() or 8)
+    chunk_size = max(1000, len(records) // (n_workers * 4))
+    chunks = [records[i:i + chunk_size] for i in range(0, len(records), chunk_size)]
+
+    with mp.Pool(processes=n_workers) as pool:
+        outputs = pool.map(_normalize_batch, chunks)
+
+    flat = [item for sub in outputs for item in sub]
+    return pd.DataFrame(flat)

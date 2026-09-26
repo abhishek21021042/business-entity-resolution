@@ -31,7 +31,7 @@ def get_feature_columns(df: pd.DataFrame) -> List[str]:
 
 def train_and_evaluate_cv(candidates_df: pd.DataFrame,
                           ground_truth_df: pd.DataFrame,
-                          n_splits: int = 5) -> Tuple[List[Any], pd.DataFrame, float, float]:
+                          n_splits: int = 8) -> Tuple[List[Any], pd.DataFrame, float, float]:
     """
     Runs GroupKFold cross-validation grouped by source1_entity_id.
     Returns:

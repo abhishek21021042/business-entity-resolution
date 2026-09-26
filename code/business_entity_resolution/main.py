@@ -12,7 +12,7 @@ from tqdm import tqdm
 
 from src.config import PROJECT_ROOT, MODELS_DIR, CANDIDATE_OUTPUT_PATH, MATCHING_OUTPUT_PATH, DEFAULT_THRESHOLD
 from src.data_loading import load_source_df, load_ground_truth, resolve_file_path, load_matched_sample
-from src.normalization import normalize_record
+from src.normalization import normalize_record, parallel_normalize_records
 from src.blocking import (
     exact_key_blocking,
     phonetic_blocking,
@@ -58,12 +58,12 @@ def run_training_pipeline(sample_limit: int = 0):
     print("\n" + "=" * 65)
     print("STEP 2: RECORD NORMALIZATION")
     print("=" * 65)
-    print("Normalizing Source 1...")
-    s1_norm = pd.DataFrame([normalize_record(r) for r in s1_df.to_dict("records")])
-    print("Normalizing Source 2...")
-    s2_norm = pd.DataFrame([normalize_record(r) for r in s2_df.to_dict("records")])
-    print("Normalizing Source 3...")
-    s3_norm = pd.DataFrame([normalize_record(r) for r in s3_df.to_dict("records")])
+    print("Normalizing Source 1 (across all 8 CPU cores)...")
+    s1_norm = parallel_normalize_records(s1_df.to_dict("records"), n_jobs=8)
+    print("Normalizing Source 2 (across all 8 CPU cores)...")
+    s2_norm = parallel_normalize_records(s2_df.to_dict("records"), n_jobs=8)
+    print("Normalizing Source 3 (across all 8 CPU cores)...")
+    s3_norm = parallel_normalize_records(s3_df.to_dict("records"), n_jobs=8)
 
     other_norm = pd.concat([s2_norm, s3_norm], ignore_index=True)
 
@@ -116,7 +116,7 @@ def run_training_pipeline(sample_limit: int = 0):
     print("\n" + "=" * 65)
     print("STEP 5: TRAINING CLASSIFIER & TUNING F0.5 THRESHOLD")
     print("=" * 65)
-    models, scored_df, best_thresh, best_f05 = train_and_evaluate_cv(cand_df, gt_df, n_splits=5)
+    models, scored_df, best_thresh, best_f05 = train_and_evaluate_cv(cand_df, gt_df, n_splits=8)
     save_models(models, best_thresh, MODELS_DIR)
 
     print(f"\nFinal Training Result: Out-Of-Fold Macro F0.5 = {best_f05:.4f} (Optimal Threshold = {best_thresh:.2f})")
