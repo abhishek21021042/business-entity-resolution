@@ -1,26 +1,24 @@
 @echo off
 title Business Entity Resolution - Multi-Machine Inference Hub
-color 0B
-chcp 65001 > nul
 
 :MENU
 cls
 echo ===================================================================
-echo     ⚡ BUSINESS ENTITY RESOLUTION - DISTRIBUTED EXECUTION HUB ⚡
+echo     BUSINESS ENTITY RESOLUTION - DISTRIBUTED EXECUTION HUB
 echo ===================================================================
 echo.
 echo   Select an option to run on this machine:
 echo.
-echo   [1] 💻 Laptop 1: Run Part 1 of 3 (Entities 0 to 577,514)
-echo   [2] 💻 Laptop 2: Run Part 2 of 3 (Entities 577,515 to 1,155,029)
-echo   [3] 💻 Laptop 3: Run Part 3 of 3 (Entities 1,155,030 to 1,732,544)
+echo   [1] Laptop 1: Run Part 1 of 3 (Entities 0 to 577,514)
+echo   [2] Laptop 2: Run Part 2 of 3 (Entities 577,515 to 1,155,029)
+echo   [3] Laptop 3: Run Part 3 of 3 (Entities 1,155,030 to 1,732,544)
 echo.
-echo   [4] 🧩 Merge All Shards into Final Submission (D:\output)
-echo   [5] 🚀 Run Full Test Data on THIS single laptop (No splitting)
-echo   [6] ❌ Exit
+echo   [4] Merge All Shards into Final Submission (D:\output)
+echo   [5] Run Full Test Data on THIS single laptop (No splitting)
+echo   [6] Exit
 echo.
 echo ===================================================================
-set /p choice="Enter your choice (1-6): "
+set /p choice=Enter your choice (1-6): 
 
 REM Detect Python executable (venv or global)
 set PYTHON_EXE=..\..\.venv\Scripts\python.exe
