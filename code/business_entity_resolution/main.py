@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
-from src.config import PROJECT_ROOT, MODELS_DIR, CANDIDATE_OUTPUT_PATH, MATCHING_OUTPUT_PATH, DEFAULT_THRESHOLD
+from src.config import PROJECT_ROOT, OUTPUT_DIR, MODELS_DIR, CANDIDATE_OUTPUT_PATH, MATCHING_OUTPUT_PATH, DEFAULT_THRESHOLD
 from src.data_loading import load_source_df, load_ground_truth, resolve_file_path, load_matched_sample
 from src.normalization import normalize_record, parallel_normalize_records
 from src.blocking import (
