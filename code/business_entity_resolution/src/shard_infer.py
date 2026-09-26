@@ -86,14 +86,31 @@ def run_sharded_inference(
 
     print("\nLoading and normalizing Source 2 and Source 3 records...")
     t0 = time.time()
-    s2_raw = load_source_df(s2_path)
-    s3_raw = load_source_df(s3_path)
-    other_raw = pd.concat([s2_raw, s3_raw], ignore_index=True)
-    print(f"Total target records (S2 + S3): {len(other_raw):,}")
 
-    other_norm = parallel_normalize_records(other_raw.to_dict("records"), n_jobs=-1)
+    # ── CACHE: Load from pickle if available (saves ~10 min on repeated runs) ──
+    import pickle
+    cache_dir = output_dir / "_cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    norm_cache  = cache_dir / "other_norm.pkl"
+    index_cache = cache_dir / "blocking_index.pkl"
+
+    if norm_cache.exists():
+        print(f"[CACHE HIT] Loading pre-normalized S2+S3 from {norm_cache} ...")
+        with open(norm_cache, "rb") as f:
+            other_norm = pickle.load(f)
+        print(f"Loaded {len(other_norm):,} records in {time.time() - t0:.1f}s (vs ~10 min from scratch)")
+    else:
+        s2_raw = load_source_df(s2_path)
+        s3_raw = load_source_df(s3_path)
+        other_raw = pd.concat([s2_raw, s3_raw], ignore_index=True)
+        print(f"Total target records (S2 + S3): {len(other_raw):,}")
+        other_norm = parallel_normalize_records(other_raw.to_dict("records"), n_jobs=-1)
+        print(f"Normalized S2+S3 in {time.time() - t0:.1f}s — saving cache...")
+        with open(norm_cache, "wb") as f:
+            pickle.dump(other_norm, f, protocol=5)
+        print(f"Cache saved to {norm_cache}  (copy to other laptops D:\\output\\_cache\\ for instant startup)")
+
     other_dict = {r["entity_id"]: r for r in other_norm.to_dict("records")}
-    print(f"Normalized S2 + S3 in {time.time() - t0:.1f}s")
 
     # 3. Read Source-1 IDs and Slice the Shard
     print("\nReading Source 1 entity IDs...")
@@ -124,71 +141,93 @@ def run_sharded_inference(
     total_matches_found = 0
 
     # Pre-build hash tables ONCE for the entire S2+S3 search space to avoid rebuilding on every chunk
-    print("Pre-building blocking hash tables for entire S2+S3 search space (Pass 1, 2, 4, 5)...")
+    print("Preparing blocking hash tables for entire S2+S3 search space (Pass 1, 2, 4, 5)...")
     t_index = time.time()
     from src.phonetic import phonetic_key
     import re
 
-    # 1. Exact sorted-core buckets
-    exact_buckets = {}
-    other_ids = other_norm["entity_id"].astype(str).str.strip().values
-    other_cores = other_norm["sorted_core"].astype(str).str.strip().values
-    other_raw_cores = other_norm["core_name"].astype(str).str.strip().values
-    other_countries = other_norm["country"].astype(str).str.strip().values
-    other_addrs = other_norm["normalized_addr"].astype(str).values
+    if index_cache.exists():
+        print(f"[CACHE HIT] Loading pre-built blocking index from {index_cache} ...")
+        with open(index_cache, "rb") as f:
+            idx_data = pickle.load(f)
+        exact_buckets = idx_data["exact"]
+        phonetic_buckets = idx_data["phonetic"]
+        first_word_buckets = idx_data["first_word"]
+        addr_buckets = idx_data["addr"]
+        print(f"Loaded blocking index in {time.time() - t_index:.1f}s! All lookups will be instantaneous O(1).\n")
+    else:
+        # 1. Exact sorted-core buckets
+        exact_buckets = {}
+        other_ids = other_norm["entity_id"].astype(str).str.strip().values
+        other_cores = other_norm["sorted_core"].astype(str).str.strip().values
+        other_raw_cores = other_norm["core_name"].astype(str).str.strip().values
+        other_countries = other_norm["country"].astype(str).str.strip().values
+        other_addrs = other_norm["normalized_addr"].astype(str).values
 
-    for cid, core, country in zip(other_ids, other_cores, other_countries):
-        if len(core) >= 3:
-            b = exact_buckets.setdefault((core, country), [])
-            if len(b) < 30:
-                b.append(cid)
-
-    # 2. Phonetic buckets
-    phonetic_buckets = {}
-    for cid, core, country in zip(other_ids, other_raw_cores, other_countries):
-        if len(core) >= 3:
-            pkey = phonetic_key(core)
-            if pkey:
-                b = phonetic_buckets.setdefault((pkey, country), [])
+        for cid, core, country in zip(other_ids, other_cores, other_countries):
+            if len(core) >= 3:
+                b = exact_buckets.setdefault((core, country), [])
                 if len(b) < 30:
                     b.append(cid)
 
-    # 3. First-word buckets
-    stopwords = {"the", "and", "for", "with", "all", "new", "top", "pro", "best", "inc", "ltd", "pvt", "corp", "llc", "co"}
-    first_word_buckets = {}
-    for cid, core, ctry in zip(other_ids, other_raw_cores, other_countries):
-        toks = [t for t in core.split() if t not in {"m/s", "dr", "mr", "ms", "sri", "shri"}]
-        if toks and len(toks[0]) >= 3 and toks[0] not in stopwords:
-            b = first_word_buckets.setdefault((toks[0], ctry), [])
-            if len(b) < 30:
-                b.append(cid)
-
-    # 4. Address number buckets
-    addr_buckets = {}
-    for cid, addr, ctry in zip(other_ids, other_addrs, other_countries):
-        if addr:
-            raw_nums = re.findall(r"\b[a-zA-Z]?[-#]?\d+[/a-zA-Z\-_]*\d*[a-zA-Z]?\b", addr.lower())
-            for n in raw_nums:
-                clean_n = n.strip("-# ").replace(" ", "")
-                if len(clean_n) >= 2 and any(c.isdigit() for c in clean_n):
-                    b = addr_buckets.setdefault((clean_n, ctry), [])
+        # 2. Phonetic buckets
+        phonetic_buckets = {}
+        for cid, core, country in zip(other_ids, other_raw_cores, other_countries):
+            if len(core) >= 3:
+                pkey = phonetic_key(core)
+                if pkey:
+                    b = phonetic_buckets.setdefault((pkey, country), [])
                     if len(b) < 30:
                         b.append(cid)
 
-    print(f"Index built in {time.time() - t_index:.1f}s! All chunk lookups will be instantaneous O(1).\n")
+        # 3. First-word buckets
+        stopwords = {"the", "and", "for", "with", "all", "new", "top", "pro", "best", "inc", "ltd", "pvt", "corp", "llc", "co"}
+        first_word_buckets = {}
+        for cid, core, ctry in zip(other_ids, other_raw_cores, other_countries):
+            toks = [t for t in core.split() if t not in {"m/s", "dr", "mr", "ms", "sri", "shri"}]
+            if toks and len(toks[0]) >= 3 and toks[0] not in stopwords:
+                b = first_word_buckets.setdefault((toks[0], ctry), [])
+                if len(b) < 30:
+                    b.append(cid)
+
+        # 4. Address number buckets
+        addr_buckets = {}
+        for cid, addr, ctry in zip(other_ids, other_addrs, other_countries):
+            if addr:
+                raw_nums = re.findall(r"\b[a-zA-Z]?[-#]?\d+[/a-zA-Z\-_]*\d*[a-zA-Z]?\b", addr.lower())
+                for n in raw_nums:
+                    clean_n = n.strip("-# ").replace(" ", "")
+                    if len(clean_n) >= 2 and any(c.isdigit() for c in clean_n):
+                        b = addr_buckets.setdefault((clean_n, ctry), [])
+                        if len(b) < 30:
+                            b.append(cid)
+
+        print(f"Saving blocking index cache to {index_cache} ...")
+        with open(index_cache, "wb") as f:
+            pickle.dump({
+                "exact": exact_buckets,
+                "phonetic": phonetic_buckets,
+                "first_word": first_word_buckets,
+                "addr": addr_buckets,
+            }, f, protocol=5)
+        print(f"Index built and cached in {time.time() - t_index:.1f}s! All lookups will be instantaneous O(1).\n")
+
+    # Pre-normalize this shard's S1 records ONCE so we don't respawn normalization pools on each chunk
+    print(f"Normalizing S1 records for this shard ({shard_count:,} entities) once...")
+    t_s1_norm = time.time()
+    shard_s1_norm = parallel_normalize_records(shard_s1.to_dict("records"), n_jobs=-1)
+    shard_s1_dict = {r["entity_id"]: r for r in shard_s1_norm.to_dict("records")}
+    print(f"Shard S1 normalized in {time.time() - t_s1_norm:.1f}s!\n")
 
     for chunk_idx in range(n_chunks):
         c_start = chunk_idx * chunk_size
         c_end = min(shard_count, c_start + chunk_size)
-        c_s1_raw = shard_s1.iloc[c_start:c_end]
-        c_s1_ids = [str(x).strip() for x in c_s1_raw["entity_id"].tolist()]
+        c_s1_norm = shard_s1_norm.iloc[c_start:c_end]
+        c_s1_ids = [str(x).strip() for x in c_s1_norm["entity_id"].tolist()]
+        c_s1_dict = {sid: shard_s1_dict[sid] for sid in c_s1_ids if sid in shard_s1_dict}
 
         print(f"--- Chunk {chunk_idx + 1}/{n_chunks} ({len(c_s1_ids):,} entities) ---")
         c_t0 = time.time()
-
-        # Normalize S1 chunk
-        c_s1_norm = parallel_normalize_records(c_s1_raw.to_dict("records"), n_jobs=-1)
-        c_s1_dict = {r["entity_id"]: r for r in c_s1_norm.to_dict("records")}
 
         # Instant O(1) Precomputed Blocking Lookups
         c_pairs_set = set()
@@ -238,7 +277,13 @@ def run_sharded_inference(
 
         # Feature Extraction & Model Scoring
         if c_pairs:
-            cand_feat_df = extract_features_parallel(c_pairs, c_s1_dict, other_dict, n_jobs=-1)
+            # OPTIMIZATION: Filter other_dict to ONLY candidates in c_pairs!
+            # Instead of sending 9.97 million items across Windows multiprocessing IPC,
+            # we send only the ~50k-200k needed candidates! (100x faster spawn & memory safe)
+            needed_cids = {cid for _, cid in c_pairs}
+            sub_other_dict = {cid: other_dict[cid] for cid in needed_cids if cid in other_dict}
+
+            cand_feat_df = extract_features_parallel(c_pairs, c_s1_dict, sub_other_dict, n_jobs=-1)
             cand_feat_df = add_rank_and_margin_features(cand_feat_df, score_col="joint_confidence")
             cols = get_feature_columns(cand_feat_df)
             X_chunk = cand_feat_df[cols]
