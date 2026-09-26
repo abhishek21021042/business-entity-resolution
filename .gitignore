@@ -1,0 +1,28 @@
+# Python & Virtual Environment
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Large Dataset Files (>100MB cannot be pushed to GitHub)
+*.tsv
+*.csv
+dataset/
+train_source*.tsv
+train_ground_truth.tsv
+test_source*.tsv
+
+# Models & Serialized Artifacts
+models/*.joblib
+models/*.pkl
+*.joblib
+*.pkl
+
+# Logs & System Generated Files
+*.log
+.system_generated/
+.DS_Store
+Thumbs.db
