@@ -179,7 +179,13 @@ def parallel_normalize_records(records: list, n_jobs: int = 8) -> pd.DataFrame:
     if len(records) < 5000:
         return pd.DataFrame([normalize_record(r) for r in records])
 
-    n_workers = min(n_jobs, os.cpu_count() or 8)
+    cpu_count = os.cpu_count() or 4
+    if n_jobs <= 0:
+        n_workers = cpu_count  # -1 means use all cores
+    else:
+        n_workers = min(n_jobs, cpu_count)
+    n_workers = max(1, n_workers)  # must be >= 1
+
     chunk_size = max(1000, len(records) // (n_workers * 4))
     chunks = [records[i:i + chunk_size] for i in range(0, len(records), chunk_size)]
 
