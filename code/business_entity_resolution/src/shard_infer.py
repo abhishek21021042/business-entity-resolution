@@ -115,6 +115,60 @@ def run_sharded_inference(
     total_pairs_generated = 0
     total_matches_found = 0
 
+    # Pre-build hash tables ONCE for the entire S2+S3 search space to avoid rebuilding on every chunk
+    print("Pre-building blocking hash tables for entire S2+S3 search space (Pass 1, 2, 4, 5)...")
+    t_index = time.time()
+    from src.phonetic import phonetic_key
+    import re
+
+    # 1. Exact sorted-core buckets
+    exact_buckets = {}
+    other_ids = other_norm["entity_id"].astype(str).str.strip().values
+    other_cores = other_norm["sorted_core"].astype(str).str.strip().values
+    other_raw_cores = other_norm["core_name"].astype(str).str.strip().values
+    other_countries = other_norm["country"].astype(str).str.strip().values
+    other_addrs = other_norm["normalized_addr"].astype(str).values
+
+    for cid, core, country in zip(other_ids, other_cores, other_countries):
+        if len(core) >= 3:
+            b = exact_buckets.setdefault((core, country), [])
+            if len(b) < 30:
+                b.append(cid)
+
+    # 2. Phonetic buckets
+    phonetic_buckets = {}
+    for cid, core, country in zip(other_ids, other_raw_cores, other_countries):
+        if len(core) >= 3:
+            pkey = phonetic_key(core)
+            if pkey:
+                b = phonetic_buckets.setdefault((pkey, country), [])
+                if len(b) < 30:
+                    b.append(cid)
+
+    # 3. First-word buckets
+    stopwords = {"the", "and", "for", "with", "all", "new", "top", "pro", "best", "inc", "ltd", "pvt", "corp", "llc", "co"}
+    first_word_buckets = {}
+    for cid, core, ctry in zip(other_ids, other_raw_cores, other_countries):
+        toks = [t for t in core.split() if t not in {"m/s", "dr", "mr", "ms", "sri", "shri"}]
+        if toks and len(toks[0]) >= 3 and toks[0] not in stopwords:
+            b = first_word_buckets.setdefault((toks[0], ctry), [])
+            if len(b) < 30:
+                b.append(cid)
+
+    # 4. Address number buckets
+    addr_buckets = {}
+    for cid, addr, ctry in zip(other_ids, other_addrs, other_countries):
+        if addr:
+            raw_nums = re.findall(r"\b[a-zA-Z]?[-#]?\d+[/a-zA-Z\-_]*\d*[a-zA-Z]?\b", addr.lower())
+            for n in raw_nums:
+                clean_n = n.strip("-# ").replace(" ", "")
+                if len(clean_n) >= 2 and any(c.isdigit() for c in clean_n):
+                    b = addr_buckets.setdefault((clean_n, ctry), [])
+                    if len(b) < 30:
+                        b.append(cid)
+
+    print(f"Index built in {time.time() - t_index:.1f}s! All chunk lookups will be instantaneous O(1).\n")
+
     for chunk_idx in range(n_chunks):
         c_start = chunk_idx * chunk_size
         c_end = min(shard_count, c_start + chunk_size)
@@ -128,14 +182,46 @@ def run_sharded_inference(
         c_s1_norm = parallel_normalize_records(c_s1_raw.to_dict("records"), n_jobs=-1)
         c_s1_dict = {r["entity_id"]: r for r in c_s1_norm.to_dict("records")}
 
-        # 5-Pass Blocking
-        p1 = exact_key_blocking(c_s1_norm, other_norm)
-        p2 = phonetic_blocking(c_s1_norm, other_norm)
-        p3 = tfidf_topk_blocking(c_s1_norm, other_norm, k=15)
-        p4 = first_word_blocking(c_s1_norm, other_norm)
-        p5 = address_key_blocking(c_s1_norm, other_norm)
+        # Instant O(1) Precomputed Blocking Lookups
+        c_pairs_set = set()
+        s1_c_ids = c_s1_norm["entity_id"].astype(str).str.strip().values
+        s1_c_cores = c_s1_norm["sorted_core"].astype(str).str.strip().values
+        s1_c_raw_cores = c_s1_norm["core_name"].astype(str).str.strip().values
+        s1_c_countries = c_s1_norm["country"].astype(str).str.strip().values
+        s1_c_addrs = c_s1_norm["normalized_addr"].astype(str).values
 
-        c_pairs = union_candidates(p1, p2, p3, p4, p5)
+        # Pass 1: Exact sorted core
+        for sid, core, country in zip(s1_c_ids, s1_c_cores, s1_c_countries):
+            if len(core) >= 3:
+                for cid in exact_buckets.get((core, country), []):
+                    c_pairs_set.add((sid, cid))
+
+        # Pass 2: Phonetic NYSIIS
+        for sid, core, country in zip(s1_c_ids, s1_c_raw_cores, s1_c_countries):
+            if len(core) >= 3:
+                pkey = phonetic_key(core)
+                if pkey:
+                    for cid in phonetic_buckets.get((pkey, country), []):
+                        c_pairs_set.add((sid, cid))
+
+        # Pass 3: First Word Core
+        for sid, core, country in zip(s1_c_ids, s1_c_raw_cores, s1_c_countries):
+            toks = [t for t in core.split() if t not in {"m/s", "dr", "mr", "ms", "sri", "shri"}]
+            if toks and len(toks[0]) >= 3 and toks[0] not in stopwords:
+                for cid in first_word_buckets.get((toks[0], country), []):
+                    c_pairs_set.add((sid, cid))
+
+        # Pass 4: Address House/Flat numbers
+        for sid, addr, country in zip(s1_c_ids, s1_c_addrs, s1_c_countries):
+            if addr:
+                raw_nums = re.findall(r"\b[a-zA-Z]?[-#]?\d+[/a-zA-Z\-_]*\d*[a-zA-Z]?\b", addr.lower())
+                for n in raw_nums:
+                    clean_n = n.strip("-# ").replace(" ", "")
+                    if len(clean_n) >= 2 and any(c.isdigit() for c in clean_n):
+                        for cid in addr_buckets.get((clean_n, country), []):
+                            c_pairs_set.add((sid, cid))
+
+        c_pairs = list(c_pairs_set)
         total_pairs_generated += len(c_pairs)
         print(f"Candidates generated: {len(c_pairs):,} pairs")
 
