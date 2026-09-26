@@ -8,6 +8,14 @@ import argparse
 from pathlib import Path
 import sys
 import time
+import os
+
+# Ensure project root is in sys.path
+_CURRENT_DIR = Path(__file__).resolve().parent
+_PROJECT_DIR = _CURRENT_DIR.parent
+if str(_PROJECT_DIR) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_DIR))
+
 import joblib
 import numpy as np
 import pandas as pd

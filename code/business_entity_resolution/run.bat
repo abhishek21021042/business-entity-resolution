@@ -1,6 +1,14 @@
 @echo off
 title Business Entity Resolution - Multi-Machine Inference Hub
 
+REM Always run from the directory where this bat file lives
+cd /d "%~dp0"
+
+REM Detect Python executable (venv or global)
+set PYTHON_EXE=..\..\venv\Scripts\python.exe
+if not exist "%PYTHON_EXE%" set PYTHON_EXE=..\..\.venv\Scripts\python.exe
+if not exist "%PYTHON_EXE%" set PYTHON_EXE=python
+
 :MENU
 cls
 echo ===================================================================
@@ -19,12 +27,6 @@ echo   [6] Exit
 echo.
 echo ===================================================================
 set /p choice=Enter your choice (1-6): 
-
-REM Detect Python executable (venv or global)
-set PYTHON_EXE=..\..\.venv\Scripts\python.exe
-if not exist "%PYTHON_EXE%" (
-    set PYTHON_EXE=python
-)
 
 if "%choice%"=="1" goto SHARD0
 if "%choice%"=="2" goto SHARD1
