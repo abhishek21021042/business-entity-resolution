@@ -10,8 +10,11 @@ import pandas as pd
 
 
 def resolve_file_path(filename: str, project_root: Path) -> Path:
-    """Finds file in dataset/train/, dataset/test/, or directly in project_root."""
+    """Finds file in Kaggle input directories, dataset/train/, dataset/test/, or directly in project_root."""
     candidates = [
+        Path(f"/kaggle/input/datasets/abhishek21021042/data-train/{filename}"),
+        Path(f"/kaggle/input/data-train/{filename}"),
+        Path(f"/kaggle/input/{filename}"),
         project_root / "dataset" / "train" / filename,
         project_root / "dataset" / "test" / filename,
         project_root / filename,
@@ -20,6 +23,14 @@ def resolve_file_path(filename: str, project_root: Path) -> Path:
     for p in candidates:
         if p.exists():
             return p
+
+    # Dynamic search across /kaggle/input if on Kaggle
+    kaggle_input = Path("/kaggle/input")
+    if kaggle_input.exists():
+        matches = list(kaggle_input.rglob(filename))
+        if matches:
+            return matches[0]
+
     return project_root / filename
 
 
