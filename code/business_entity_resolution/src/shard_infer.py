@@ -361,8 +361,9 @@ def run_sharded_inference(
                             add_cands(sid, b, max_cap=15)
 
         c_pairs = [(sid, cid) for sid, cids in s1_cand_map.items() for cid in cids]
-        total_pairs_generated += len(c_pairs)
-        print(f"Candidates generated: {len(c_pairs):,} pairs")
+        n_chunk_pairs = len(c_pairs)
+        total_pairs_generated += n_chunk_pairs
+        print(f"Candidates generated: {n_chunk_pairs:,} pairs")
         c_cand_dict = s1_cand_map
 
         # Feature Extraction & Model Scoring
@@ -379,11 +380,10 @@ def run_sharded_inference(
             for m in models:
                 probs += m.predict_proba(X_chunk)[:, 1]
             probs /= len(models)
+            cand_feat_df["pred_score"] = probs
+            cand_feat_df["score"] = probs
             raw_matches = resolve_global_conflicts(cand_feat_df, threshold=tuned_thresh)
             c_match_dict = apply_singleton_rule(raw_matches, c_s1_ids)
-            del cand_feat_df, X_chunk, sub_other_dict, c_pairs
-            import gc
-            gc.collect()
         else:
             c_match_dict = {sid: [] for sid in c_s1_ids}
 
@@ -407,10 +407,17 @@ def run_sharded_inference(
             chunk_idx=chunk_idx,
             total_chunks=n_chunks,
             processed_entities=c_end,
-            new_candidates=len(c_pairs),
+            new_candidates=n_chunk_pairs,
             new_matches=total_matches_found,
             stage_msg=f"Finished Chunk {chunk_idx + 1}/{n_chunks} ({c_end:,}/{shard_count:,} S1)"
         )
+
+        # Explicitly free memory after chunk completion
+        if c_pairs:
+            del cand_feat_df, X_chunk, sub_other_dict, c_pairs
+        del c_cand_dict, c_match_dict, s1_cand_map, s1_cand_sets
+        import gc
+        gc.collect()
 
     tracker.mark_complete(out_cand_file, out_match_file)
     print("=" * 65)
