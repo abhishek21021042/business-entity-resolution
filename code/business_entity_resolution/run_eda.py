@@ -54,21 +54,27 @@ def main():
     print(f"(If ~0, greedy 1-to-many conflict resolution is 100% valid)")
 
     # Sample 5 true matches to observe noise patterns
-    print("\n--- Sample True Positive Pairs ---")
+    print("\n--- Sample True Positive Pairs ---", flush=True)
     sample_gt = gt[gt["n_matches"] > 0].head(5)
-    s2_dict = {row["entity_id"]: row for _, row in s2.iterrows() if row["entity_id"] in set(sample_gt.explode("match_list")["match_list"])}
-    s3_dict = {row["entity_id"]: row for _, row in s3.iterrows() if row["entity_id"] in set(sample_gt.explode("match_list")["match_list"])}
+    needed_ids = set(sample_gt.explode("match_list")["match_list"])
+    s2_sub = s2[s2["entity_id"].isin(needed_ids)]
+    s3_sub = s3[s3["entity_id"].isin(needed_ids)]
+    s2_dict = {r["entity_id"]: r for r in s2_sub.to_dict("records")}
+    s3_dict = {r["entity_id"]: r for r in s3_sub.to_dict("records")}
+
+    s1_sub = s1[s1["entity_id"].isin(sample_gt["source1_entity_id"])]
+    s1_dict = {r["entity_id"]: r for r in s1_sub.to_dict("records")}
 
     for _, row in sample_gt.iterrows():
         sid = row["source1_entity_id"]
-        s1_row = s1[s1["entity_id"] == sid].iloc[0]
-        print(f"\n[S1: {sid}] {s1_row['name']} | {s1_row['address']} ({s1_row['country']})")
+        s1_row = s1_dict.get(sid, {})
+        print(f"\n[S1: {sid}] {s1_row.get('name')} | {s1_row.get('address')} ({s1_row.get('country')})", flush=True)
         for cid in row["match_list"][:3]:
             cand = s2_dict.get(cid) or s3_dict.get(cid)
             if cand is not None:
-                print(f"   -> [{cid}] {cand['name']} | {cand['address']} ({cand['country']})")
+                print(f"   -> [{cid}] {cand.get('name')} | {cand.get('address')} ({cand.get('country')})", flush=True)
 
-    print("\nEDA Completed successfully!")
+    print("\nEDA Completed successfully!", flush=True)
 
 if __name__ == "__main__":
     main()

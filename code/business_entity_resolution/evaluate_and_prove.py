@@ -95,25 +95,25 @@ def run_proof_evaluation(n_entities: int = 500):
                 break
     s3_df = pd.DataFrame(s3_rows, columns=cols)
 
-    print(f"Loaded: S1={len(s1_df)}, S2={len(s2_df)}, S3={len(s3_df)}, True Matches In Ground Truth={len(true_cands)}")
+    print(f"Loaded: S1={len(s1_df)}, S2={len(s2_df)}, S3={len(s3_df)}, True Matches In Ground Truth={len(true_cands)}", flush=True)
 
     # [2/5] Normalization
-    print("\n[2/5] Normalizing records...")
+    print("\n[2/5] Normalizing records...", flush=True)
     s1_norm = pd.DataFrame([normalize_record(r) for r in s1_df.to_dict("records")])
     s2_norm = pd.DataFrame([normalize_record(r) for r in s2_df.to_dict("records")])
     s3_norm = pd.DataFrame([normalize_record(r) for r in s3_df.to_dict("records")])
     other_norm = pd.concat([s2_norm, s3_norm], ignore_index=True)
 
     # [3/5] Multi-pass Blocking
-    print("\n[3/5] Running multi-pass candidate blocking...")
+    print("\n[3/5] Running multi-pass candidate blocking...", flush=True)
     p1 = exact_key_blocking(s1_norm, other_norm)
     p2 = phonetic_blocking(s1_norm, other_norm)
     p3 = tfidf_topk_blocking(s1_norm, other_norm, k=15)
     all_pairs = union_candidates(p1, p2, p3)
-    print(f"Generated {len(all_pairs)} candidate pairs.")
+    print(f"Generated {len(all_pairs)} candidate pairs.", flush=True)
 
     # [4/5] Features & Scoring with Saved Models
-    print("\n[4/5] Extracting pairwise features & scoring with trained ensemble...")
+    print("\n[4/5] Extracting pairwise features & scoring with trained ensemble...", flush=True)
     s1_dict = {r["entity_id"]: r for r in s1_norm.to_dict("records")}
     other_dict = {r["entity_id"]: r for r in other_norm.to_dict("records")}
 
@@ -130,21 +130,37 @@ def run_proof_evaluation(n_entities: int = 500):
     cand_df = pd.DataFrame(pair_rows)
     cand_df = add_rank_and_margin_features(cand_df, score_col="name_token_set_ratio")
 
-    models = joblib.load(MODELS_DIR / "ensemble_models.joblib")
-    meta = joblib.load(MODELS_DIR / "meta.joblib")
-    threshold = meta["threshold"]
+    model_file = MODELS_DIR / "ensemble_models.joblib"
+    meta_file = MODELS_DIR / "meta.joblib"
 
-    feature_cols = get_feature_columns(cand_df)
-    X = cand_df[feature_cols]
+    if not model_file.exists() or not meta_file.exists():
+        print("\nTrained model not found on disk. Training a quick 5-fold ensemble now...", flush=True)
+        gt_pair_set = set()
+        for _, row in gt_full_slice.iterrows():
+            for m in row["match_list"]:
+                gt_pair_set.add((row["source1_entity_id"], m))
 
-    preds = np.zeros(len(cand_df), dtype=np.float32)
-    for m in models:
-        preds += m.predict_proba(X)[:, 1]
-    preds /= len(models)
-    cand_df["pred_score"] = preds
+        cand_df["label"] = [int((s, c) in gt_pair_set) for s, c in zip(cand_df["source1_entity_id"], cand_df["candidate_entity_id"])]
+        from src.train_model import train_and_evaluate_cv, save_models
+        models, scored_df, threshold, _ = train_and_evaluate_cv(cand_df, gt_full_slice, n_splits=5)
+        save_models(models, threshold, MODELS_DIR)
+        cand_df = scored_df
+    else:
+        models = joblib.load(model_file)
+        meta = joblib.load(meta_file)
+        threshold = meta["threshold"]
+
+        feature_cols = get_feature_columns(cand_df)
+        X = cand_df[feature_cols]
+
+        preds = np.zeros(len(cand_df), dtype=np.float32)
+        for m in models:
+            preds += m.predict_proba(X)[:, 1]
+        preds /= len(models)
+        cand_df["pred_score"] = preds
 
     # [5/5] Consistency Post-Processing & Evaluation
-    print(f"\n[5/5] Applying global consistency resolution (threshold = {threshold:.2f})...")
+    print(f"\n[5/5] Applying global consistency resolution (threshold = {threshold:.2f})...", flush=True)
     raw_matches = resolve_global_conflicts(cand_df, threshold=threshold)
     final_preds = apply_singleton_rule(raw_matches, list(s1_df["entity_id"].unique()))
 
