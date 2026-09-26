@@ -224,12 +224,21 @@ def run_sharded_inference(
             }, f, protocol=5)
         print(f"Index built and cached in {time.time() - t_index:.1f}s! All lookups will be instantaneous O(1).\n")
 
-    # Pre-normalize this shard's S1 records ONCE so we don't respawn normalization pools on each chunk
-    print(f"Normalizing S1 records for this shard ({shard_count:,} entities) once...")
-    t_s1_norm = time.time()
-    shard_s1_norm = parallel_normalize_records(shard_s1.to_dict("records"), n_jobs=-1)
+    # Pre-normalize this shard's S1 records ONCE (cached as well for instant resume)
+    shard_s1_cache = cache_dir / f"shard_{shard_id}_of_{num_shards}_s1_norm.pkl"
+    if shard_s1_cache.exists():
+        print(f"[CACHE HIT] Loading pre-normalized S1 shard from {shard_s1_cache.name} ...")
+        with open(shard_s1_cache, "rb") as f:
+            shard_s1_norm = pickle.load(f)
+    else:
+        print(f"Normalizing S1 records for this shard ({shard_count:,} entities) once...")
+        t_s1_norm = time.time()
+        shard_s1_norm = parallel_normalize_records(shard_s1.to_dict("records"), n_jobs=-1)
+        with open(shard_s1_cache, "wb") as f:
+            pickle.dump(shard_s1_norm, f, protocol=5)
+        print(f"Shard S1 normalized in {time.time() - t_s1_norm:.1f}s!\n")
+
     shard_s1_dict = {r["entity_id"]: r for r in shard_s1_norm.to_dict("records")}
-    print(f"Shard S1 normalized in {time.time() - t_s1_norm:.1f}s!\n")
 
     for chunk_idx in range(n_chunks):
         c_start = chunk_idx * chunk_size
