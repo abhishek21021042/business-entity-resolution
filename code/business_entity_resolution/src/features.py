@@ -237,20 +237,34 @@ def add_rank_and_margin_features(candidates_df: pd.DataFrame,
     return df
 
 
-def _process_pair_chunk(pairs_chunk: List[Tuple[str, str]],
-                        s1_dict: Dict[str, Any],
-                        other_dict: Dict[str, Any],
-                        gt_pair_set: Optional[Set[Tuple[str, str]]] = None) -> List[Dict[str, Any]]:
+import os
+import multiprocessing as mp
+
+_GLOBAL_S1_DICT: Optional[Dict[str, Any]] = None
+_GLOBAL_OTHER_DICT: Optional[Dict[str, Any]] = None
+_GLOBAL_GT_SET: Optional[Set[Tuple[str, str]]] = None
+
+
+def _init_feature_worker(s1_dict: Dict[str, Any],
+                         other_dict: Dict[str, Any],
+                         gt_pair_set: Optional[Set[Tuple[str, str]]]):
+    global _GLOBAL_S1_DICT, _GLOBAL_OTHER_DICT, _GLOBAL_GT_SET
+    _GLOBAL_S1_DICT = s1_dict
+    _GLOBAL_OTHER_DICT = other_dict
+    _GLOBAL_GT_SET = gt_pair_set
+
+
+def _process_pair_chunk(pairs_chunk: List[Tuple[str, str]]) -> List[Dict[str, Any]]:
     results = []
     for sid, cid in pairs_chunk:
-        r1 = s1_dict.get(sid)
-        rc = other_dict.get(cid)
+        r1 = _GLOBAL_S1_DICT.get(sid)
+        rc = _GLOBAL_OTHER_DICT.get(cid)
         if r1 is not None and rc is not None:
             feat = compute_pair_features(r1, rc)
             feat["source1_entity_id"] = sid
             feat["candidate_entity_id"] = cid
-            if gt_pair_set is not None:
-                feat["label"] = int((sid, cid) in gt_pair_set)
+            if _GLOBAL_GT_SET is not None:
+                feat["label"] = int((sid, cid) in _GLOBAL_GT_SET)
             results.append(feat)
     return results
 
@@ -260,21 +274,29 @@ def extract_features_parallel(pairs: List[Tuple[str, str]],
                               other_dict: Dict[str, Any],
                               gt_pair_set: Optional[Set[Tuple[str, str]]] = None,
                               n_jobs: int = -1,
-                              chunk_size: int = 5000) -> pd.DataFrame:
+                              chunk_size: Optional[int] = None) -> pd.DataFrame:
     """
-    Extracts features for all candidate pairs in parallel across all CPU cores.
+    Extracts features for all candidate pairs in parallel across all CPU cores
+    with zero IPC serialization overhead. Pre-initializes worker processes so
+    the 100k-record dicts are sent exactly ONCE instead of on every chunk.
     """
-    from joblib import Parallel, delayed
-
     if not pairs:
         return pd.DataFrame()
 
     from tqdm import tqdm
+
+    n_workers = os.cpu_count() or 8
+    if n_jobs > 0:
+        n_workers = min(n_jobs, n_workers)
+
+    if chunk_size is None:
+        chunk_size = max(5000, len(pairs) // (n_workers * 16))
+
     chunks = [pairs[i:i + chunk_size] for i in range(0, len(pairs), chunk_size)]
-    outputs = Parallel(n_jobs=n_jobs, batch_size=1)(
-        delayed(_process_pair_chunk)(chunk, s1_dict, other_dict, gt_pair_set)
-        for chunk in tqdm(chunks, desc="Extracting features (all 8 cores)")
-    )
+
+    with mp.Pool(processes=n_workers, initializer=_init_feature_worker, initargs=(s1_dict, other_dict, gt_pair_set)) as pool:
+        outputs = list(tqdm(pool.imap(_process_pair_chunk, chunks, chunksize=1), total=len(chunks), desc="Extracting features (all 8 cores)"))
+
     flat = []
     for sublist in outputs:
         flat.extend(sublist)

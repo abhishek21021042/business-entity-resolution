@@ -56,29 +56,42 @@ def train_and_evaluate_cv(candidates_df: pd.DataFrame,
     print(f"Dataset stats: Total={len(candidates_df)}, Positives={pos_count}, Negatives={neg_count}, Class Ratio={pos_weight:.2f}")
     print(f"Features ({len(feature_cols)}): {feature_cols}")
 
-    for fold, (train_idx, val_idx) in enumerate(gkf.split(X, y, groups)):
-        X_train, y_train = X.iloc[train_idx], y[train_idx]
-        X_val, y_val = X.iloc[val_idx], y[val_idx]
+    import os
+    from joblib import Parallel, delayed
 
-        sample_weight_train = np.where(y_train == 1, pos_weight, 1.0)
-
-        # HistGradientBoostingClassifier: high-performance histogram tree
-        clf = HistGradientBoostingClassifier(
+    def _train_single_fold(fold_info):
+        f_idx, tr_idx, v_idx = fold_info
+        X_tr, y_tr = X.iloc[tr_idx], y[tr_idx]
+        X_va = X.iloc[v_idx]
+        sw = np.where(y_tr == 1, pos_weight, 1.0)
+        c = HistGradientBoostingClassifier(
             loss="log_loss",
             learning_rate=0.05,
             max_iter=300,
             max_leaf_nodes=31,
             early_stopping=True,
             n_iter_no_change=25,
-            random_state=RANDOM_SEED + fold,
+            random_state=RANDOM_SEED + f_idx,
             class_weight="balanced"
         )
-        clf.fit(X_train, y_train, sample_weight=sample_weight_train)
-        models.append(clf)
+        c.fit(X_tr, y_tr, sample_weight=sw)
+        vp = c.predict_proba(X_va)[:, 1]
+        return f_idx, c, v_idx, vp
 
-        val_probs = clf.predict_proba(X_val)[:, 1]
-        oof_preds[val_idx] = val_probs
-        print(f"Fold {fold + 1}/{n_splits} complete.")
+    fold_tasks = [(f, tr, va) for f, (tr, va) in enumerate(gkf.split(X, y, groups))]
+    n_workers = min(n_splits, os.cpu_count() or 5)
+    print(f"Training all {n_splits} folds simultaneously across {n_workers} CPU cores...")
+
+    fold_results = Parallel(n_jobs=n_workers)(
+        delayed(_train_single_fold)(task) for task in fold_tasks
+    )
+
+    # Sort results by fold index
+    fold_results.sort(key=lambda x: x[0])
+    for f_idx, clf, v_idx, vp in fold_results:
+        models.append(clf)
+        oof_preds[v_idx] = vp
+        print(f"Fold {f_idx + 1}/{n_splits} complete.")
 
     scored_df = candidates_df.copy()
     scored_df["pred_score"] = oof_preds
