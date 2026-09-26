@@ -75,22 +75,24 @@ def validate_submission(matching_file: Path,
         dup_count = candidate_df["source1_entity_id"].duplicated().sum()
         errors.append(f"Found {dup_count} duplicate source1_entity_id rows in candidate_pairs.tsv")
 
-    # Map candidate IDs per S1
-    cand_map = {}
-    for _, row in candidate_df.iterrows():
-        sid = str(row["source1_entity_id"]).strip()
-        c_str = str(row["candidate_entity_ids"]).strip()
-        c_list = [c.strip() for c in c_str.split(",") if c.strip()]
-        cand_map[sid] = set(c_list)
+    # Fast vectorized map of candidate IDs per S1
+    print("Building fast candidate verification index...")
+    s1_cand_ids = candidate_df["source1_entity_id"].astype(str).str.strip().values
+    cand_strings = candidate_df["candidate_entity_ids"].astype(str).values
+    cand_map = {sid: set(c.split(",")) for sid, c in zip(s1_cand_ids, cand_strings) if c}
 
     # Check rows in matching_results
+    print("Verifying matching consistency against candidate pairs...")
+    s1_match_ids = matching_df["source1_entity_id"].astype(str).str.strip().values
+    match_strings = matching_df["matched_entity_ids"].astype(str).values
+
     invalid_s1_in_matched = 0
     duplicate_matched_ids = 0
     not_in_candidate_count = 0
 
-    for _, row in matching_df.iterrows():
-        sid = str(row["source1_entity_id"]).strip()
-        m_str = str(row["matched_entity_ids"]).strip()
+    for sid, m_str in zip(s1_match_ids, match_strings):
+        if not m_str:
+            continue
         m_list = [m.strip() for m in m_str.split(",") if m.strip()]
 
         # Check: no S1- IDs in matched_entity_ids

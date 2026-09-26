@@ -872,6 +872,7 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
 
     def run_merge(self):
         out_d = detect_output_dir()
+        test_d = detect_test_dir()
         py_exe = get_python_exe()
         cmd = [
             py_exe,

@@ -10,6 +10,11 @@ import sys
 from typing import Optional
 import pandas as pd
 
+try:
+    sys.stdout.reconfigure(line_buffering=True)
+except Exception:
+    pass
+
 from src.path_utils import detect_output_dir, detect_test_dir
 from utils.validate_submission import validate_submission
 
@@ -52,11 +57,12 @@ def merge_shards(output_dir: Optional[Path] = None, num_shards: int = 3, test_di
         for i, s_file in enumerate(cand_shards):
             print(f"Merging candidate shard {i + 1}/{num_shards} ({s_file.name})...")
             with open(s_file, "r", encoding="utf-8") as f_in:
-                lines = f_in.readlines()
-                for line in lines[1:]:  # skip header
-                    if line.strip():
-                        f_out.write(line)
-                        total_cand_rows += 1
+                for line in f_in:
+                    clean = line.strip()
+                    if not clean or clean.startswith("source1_entity_id"):
+                        continue
+                    f_out.write(line)
+                    total_cand_rows += 1
 
     # Merge matching results
     total_match_rows = 0
@@ -65,11 +71,12 @@ def merge_shards(output_dir: Optional[Path] = None, num_shards: int = 3, test_di
         for i, s_file in enumerate(match_shards):
             print(f"Merging matching shard {i + 1}/{num_shards} ({s_file.name})...")
             with open(s_file, "r", encoding="utf-8") as f_in:
-                lines = f_in.readlines()
-                for line in lines[1:]:  # skip header
-                    if line.strip():
-                        f_out.write(line)
-                        total_match_rows += 1
+                for line in f_in:
+                    clean = line.strip()
+                    if not clean or clean.startswith("source1_entity_id"):
+                        continue
+                    f_out.write(line)
+                    total_match_rows += 1
 
     print("\n" + "=" * 65)
     print("MERGE COMPLETE!")
