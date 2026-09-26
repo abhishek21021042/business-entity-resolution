@@ -137,7 +137,7 @@ def run_prediction_pipeline(test_dir: Path):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Business Entity Resolution Pipeline")
     parser.add_argument("--train", action="store_true", help="Run model training and CV")
-    parser.add_argument("--sample", type=int, default=0, help="Subsample N S1 records for fast testing")
+    parser.add_argument("--sample", type=int, default=50000, help="Number of S1 entities to train on (default: 50000 for high precision & memory safety, 0 for full)")
     parser.add_argument("--predict", action="store_true", help="Run inference on test directory")
     parser.add_argument("--test-dir", type=Path, default=PROJECT_ROOT / "dataset" / "test", help="Test directory")
 

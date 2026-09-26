@@ -19,61 +19,68 @@ from .config import BLOCKING_TOP_K_TFIDF, BLOCKING_TOP_K_EMB, TFIDF_NGRAM_RANGE
 
 
 
-def exact_key_blocking(s1_df: pd.DataFrame, other_df: pd.DataFrame) -> List[Tuple[str, str]]:
+def exact_key_blocking(s1_df: pd.DataFrame, other_df: pd.DataFrame, max_bucket_size: int = 30) -> List[Tuple[str, str]]:
     """
     Pass 1: Exact sorted-core-name + country hash bucketing.
-    Also falls back to matching on sorted-core-name if country is empty.
+    Memory-safe: vectorized array iteration with max_bucket_size cap to prevent combinatorial explosion.
     """
     pairs = []
     buckets = {}
 
-    for _, row in other_df.iterrows():
-        cid = str(row["entity_id"]).strip()
-        core = str(row["sorted_core"]).strip()
-        country = str(row["country"]).strip()
-        if core:
-            buckets.setdefault((core, country), []).append(cid)
-            # also bucket on core alone for country-mismatched or missing-country cases
-            buckets.setdefault((core, "*"), []).append(cid)
+    other_ids = other_df["entity_id"].astype(str).str.strip().values
+    other_cores = other_df["sorted_core"].astype(str).str.strip().values
+    other_countries = other_df["country"].astype(str).str.strip().values
 
-    for _, row in s1_df.iterrows():
-        sid = str(row["entity_id"]).strip()
-        core = str(row["sorted_core"]).strip()
-        country = str(row["country"]).strip()
-        if core:
-            # Check exact country match first
+    for cid, core, country in zip(other_ids, other_cores, other_countries):
+        if len(core) >= 3:
+            b = buckets.setdefault((core, country), [])
+            if len(b) < max_bucket_size:
+                b.append(cid)
+
+    s1_ids = s1_df["entity_id"].astype(str).str.strip().values
+    s1_cores = s1_df["sorted_core"].astype(str).str.strip().values
+    s1_countries = s1_df["country"].astype(str).str.strip().values
+
+    for sid, core, country in zip(s1_ids, s1_cores, s1_countries):
+        if len(core) >= 3:
             matched = buckets.get((core, country), [])
-            # Also include core-only matches if country is unknown/unseen
-            if not matched and country == "":
-                matched = buckets.get((core, "*"), [])
             for cid in matched:
                 pairs.append((sid, cid))
 
     return pairs
 
 
-def phonetic_blocking(s1_df: pd.DataFrame, other_df: pd.DataFrame) -> List[Tuple[str, str]]:
+def phonetic_blocking(s1_df: pd.DataFrame, other_df: pd.DataFrame, max_bucket_size: int = 30) -> List[Tuple[str, str]]:
     """
-    Phonetic bucketing pass: NYSIIS key of core name + country.
-    Catches phonetic spelling variants and minor transliteration differences.
+    Pass 2: Phonetic NYSIIS key of core name + country.
+    Memory-safe: vectorized array iteration with max_bucket_size cap.
     """
     pairs = []
     buckets = {}
 
-    for _, row in other_df.iterrows():
-        cid = str(row["entity_id"]).strip()
-        pkey = phonetic_key(str(row["core_name"]).strip())
-        country = str(row["country"]).strip()
-        if pkey:
-            buckets.setdefault((pkey, country), []).append(cid)
+    other_ids = other_df["entity_id"].astype(str).str.strip().values
+    other_cores = other_df["core_name"].astype(str).str.strip().values
+    other_countries = other_df["country"].astype(str).str.strip().values
 
-    for _, row in s1_df.iterrows():
-        sid = str(row["entity_id"]).strip()
-        pkey = phonetic_key(str(row["core_name"]).strip())
-        country = str(row["country"]).strip()
-        if pkey:
-            for cid in buckets.get((pkey, country), []):
-                pairs.append((sid, cid))
+    for cid, core, country in zip(other_ids, other_cores, other_countries):
+        if len(core) >= 3:
+            pkey = phonetic_key(core)
+            if pkey:
+                b = buckets.setdefault((pkey, country), [])
+                if len(b) < max_bucket_size:
+                    b.append(cid)
+
+    s1_ids = s1_df["entity_id"].astype(str).str.strip().values
+    s1_cores = s1_df["core_name"].astype(str).str.strip().values
+    s1_countries = s1_df["country"].astype(str).str.strip().values
+
+    for sid, core, country in zip(s1_ids, s1_cores, s1_countries):
+        if len(core) >= 3:
+            pkey = phonetic_key(core)
+            if pkey:
+                matched = buckets.get((pkey, country), [])
+                for cid in matched:
+                    pairs.append((sid, cid))
 
     return pairs
 
