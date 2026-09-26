@@ -78,8 +78,8 @@ def run_training_pipeline(sample_limit: int = 0):
     p2 = phonetic_blocking(s1_norm, other_norm)
     print(f"Pass 2 generated: {len(p2)} pairs")
 
-    print("Pass 3: Character n-gram TF-IDF top-K...")
-    p3 = tfidf_topk_blocking(s1_norm, other_norm, k=25)
+    print("Pass 3: Character n-gram TF-IDF top-K (k=15 for high precision & speed)...")
+    p3 = tfidf_topk_blocking(s1_norm, other_norm, k=15)
     print(f"Pass 3 generated: {len(p3)} pairs")
 
     print("Pass 4: Distinctive first-word core name hashing...")
