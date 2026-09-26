@@ -438,7 +438,7 @@ if __name__ == "__main__":
     parser.add_argument("--num-shards", type=int, default=3, help="Total number of laptops/shards (default: 3)")
     parser.add_argument("--shard-id", type=int, default=0, help="Zero-indexed shard ID (0, 1, or 2)")
     parser.add_argument("--chunk-size", type=int, default=100000, help="Streaming batch size")
-    parser.add_argument("--threshold", type=float, default=0.95, help="F0.5 threshold")
+    parser.add_argument("--threshold", type=float, default=0.65, help="F0.5 threshold")
 
     args = parser.parse_args()
     run_sharded_inference(
